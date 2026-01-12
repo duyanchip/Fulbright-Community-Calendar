@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <title>Fulbright Student Schedule - Community Version</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script async defer src="https://apis.google.com/js/api.js" onload="gapiLoaded()"></script>
+    <script async defer src="https://accounts.google.com/gsi/client" onload="gisLoaded()"></script>
+    <style>
+        :root { --h: 55px; --other-color: #007bff; --fuv-color: #ce0000; --border: #e2e8f0; }
+        body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; margin: 0; padding: 20px; }
+        .main-wrapper { max-width: 1600px; margin: auto; }
+        
+        .config-section { background: #2d3748; color: white; padding: 20px; border-radius: 12px; margin-bottom: 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 30px; }
+        .config-box { border-left: 3px solid #4a5568; padding-left: 15px; }
+        .holiday-list { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 10px; }
+        .holiday-tag { background: #e53e3e; padding: 4px 10px; border-radius: 4px; font-size: 12px; display: flex; align-items: center; gap: 8px; }
+        .holiday-tag span { cursor: pointer; font-weight: bold; }
+
+        .input-row { display: flex; gap: 20px; margin-bottom: 20px; }
+        .input-panel { flex: 1; background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); border-top: 5px solid transparent; }
+        .panel-other { border-top-color: var(--other-color); }
+        .panel-fuv { border-top-color: var(--fuv-color); }
+        
+        label { display: block; font-weight: bold; margin-bottom: 5px; font-size: 13px; color: #4a5568; }
+        input, select { width: 100%; padding: 8px; border: 1px solid #cbd5e0; border-radius: 6px; box-sizing: border-box; margin-bottom: 10px; }
+        
+        .btn { padding: 10px 15px; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; transition: 0.2s; }
+        .btn-util { background: #4a5568; margin: 0 5px; }
+        .btn-google { background: #4285F4; }
+        .btn-sync { background: #db4437; display: none; }
+
+        .calendar-panel { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); overflow-x: auto; }
+        .calendar { display: grid; grid-template-columns: 70px repeat(7, 1fr); border: 1px solid var(--border); background: white; min-width: 1100px; position: relative; }
+        .head { background: #2d3748; color: white; text-align: center; padding: 12px 0; font-weight: bold; border-right: 1px solid #4a5568; }
+        .time-row { height: var(--h); border-bottom: 1px solid var(--border); text-align: center; line-height: var(--h); font-size: 12px; background: #f7fafc; border-right: 1px solid var(--border); font-weight: bold; }
+        .cell { height: var(--h); border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); position: relative; }
+        .course-card { position: absolute; color: white; border-radius: 6px; padding: 6px; font-size: 11px; z-index: 10; box-shadow: 0 4px 8px rgba(0,0,0,0.15); cursor: pointer; overflow: hidden; }
+    </style>
+</head>
+<body>
+
+<div class="main-wrapper">
+    <div class="config-section">
+        <div class="config-box">
+            <h4>🗓 Thời gian Học kỳ</h4>
+            <div style="display:flex; gap:10px;">
+                <div>Bắt đầu: <input type="date" id="sem_start" onchange="saveDates()"></div>
+                <div>Kết thúc: <input type="date" id="sem_end" onchange="saveDates()"></div>
+            </div>
+        </div>
+        <div class="config-box">
+            <h4>🌴 Ngày nghỉ (Né khi đồng bộ Google)</h4>
+            <div style="display:flex; gap:10px; align-items: flex-end;">
+                <div>Từ: <input type="date" id="hol_start"></div>
+                <div>Đến: <input type="date" id="hol_end"></div>
+                <button onclick="addHoliday()" style="padding: 8px 15px; background: #38a169; border: none; color: white; border-radius: 6px; cursor: pointer; height: 35px; margin-bottom: 10px;">+ Thêm</button>
+            </div>
+            <div class="holiday-list" id="hol_list"></div>
+        </div>
+    </div>
+
+    <div class="input-row">
+        <div class="input-panel panel-other">
+            <h3 style="margin-top:0; color:var(--other-color)">🌟 Hoạt động khác</h3>
+            <label>Tên hoạt động</label><input type="text" id="other_name" placeholder="VD: CLB Robot, Đi làm thêm...">
+            <label>Thứ</label>
+            <select id="other_day">
+                <option value="2">Thứ 2</option><option value="3">Thứ 3</option><option value="4">Thứ 4</option>
+                <option value="5">Thứ 5</option><option value="6">Thứ 6</option><option value="7">Thứ 7</option>
+                <option value="8">Chủ Nhật</option>
+            </select>
+            <div style="display:flex; gap:10px">
+                <div style="flex:1"><label>Bắt đầu (G:P)</label><div style="display:flex; align-items:center"><input type="number" id="other_startH" value="17">:<input type="number" id="other_startM" value="30"></div></div>
+                <div style="flex:1"><label>Kết thúc (G:P)</label><div style="display:flex; align-items:center"><input type="number" id="other_endH" value="19">:<input type="number" id="other_endM" value="0"></div></div>
+            </div>
+            <label>Địa điểm</label><input type="text" id="other_room" placeholder="VD: Makerspace, Quận 7...">
+            <button class="btn" style="background:var(--other-color); width:100%" onclick="addOther()">Thêm hoạt động</button>
+        </div>
+
+        <div class="input-panel panel-fuv">
+            <h3 style="margin-top:0; color:var(--fuv-color)">🎓 Môn học Fulbright</h3>
+            <label>Tên môn học</label><input type="text" id="fuv_name" placeholder="VD: Geopolitics, Ethics...">
+            <label>Thứ</label>
+            <select id="fuv_day">
+                <option value="2">Thứ 2</option><option value="3">Thứ 3</option><option value="4">Thứ 4</option>
+                <option value="5">Thứ 5</option><option value="6">Thứ 6</option><option value="7">Thứ 7</option>
+                <option value="8">Chủ Nhật</option>
+            </select>
+            <div style="display:flex; gap:10px">
+                <div style="flex:1"><label>Bắt đầu (G:P)</label><div style="display:flex; align-items:center"><input type="number" id="fuv_startH" value="9">:<input type="number" id="fuv_startM" value="0"></div></div>
+                <div style="flex:1"><label>Kết thúc (G:P)</label><div style="display:flex; align-items:center"><input type="number" id="fuv_endH" value="11">:<input type="number" id="fuv_endM" value="0"></div></div>
+            </div>
+            <label>Phòng học</label><input type="text" id="fuv_room" placeholder="VD: Classroom 502">
+            <button class="btn" style="background:var(--fuv-color); width:100%" onclick="addFUV()">Thêm môn FUV</button>
+        </div>
+    </div>
+
+    <div style="display:flex; justify-content: center; margin-bottom: 20px;">
+        <button class="btn btn-util" style="background:#28a745" onclick="exportImg()">📸 Xuất ảnh lịch</button>
+        <button id="auth_button" class="btn btn-util btn-google" onclick="handleAuthClick()">🔐 Đăng nhập Google</button>
+        <button id="sync_button" class="btn btn-util" style="background:#db4437; display:none" onclick="syncToGoogle()">📅 Đồng bộ Google Calendar</button>
+        <button class="btn btn-util" onclick="resetSchedule()">🗑 Xóa sạch</button>
+    </div>
+
+    <div class="calendar-panel" id="captureRegion">
+        <h2 style="text-align: center;">📅 Lịch Cá Nhân: Môn học & Hoạt động Fulbright</h2>
+        <div class="calendar" id="grid"></div>
+    </div>
+</div>
+
+<script>
+    // --- THAY CLIENT_ID VÀ API_KEY CỦA BẠN TẠI ĐÂY ---
+    const CLIENT_ID = 'YOUR_CLIENT_ID.apps.googleusercontent.com';
+    const API_KEY = 'YOUR_API_KEY';
+    const SCOPES = "https://www.googleapis.com/auth/calendar.events";
+    const DISCOVERY_DOC = "https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest";
+
+    let schedule = [], holidays = [], tokenClient, gapiInited = false, gisInited = false;
+
+    // --- MÀU NGẪU NHIÊN ---
+    function generatePureRandomColor() {
+        const letters = '0123456789ABC'; let color = '#';
+        for (let i = 0; i < 6; i++) color += letters[Math.floor(Math.random() * letters.length)];
+        return color;
+    }
+
+    // --- GOOGLE API ---
+    function gapiLoaded() { gapi.load('client', async () => { await gapi.client.init({ apiKey: API_KEY, discoveryDocs: [DISCOVERY_DOC] }); gapiInited = true; }); }
+    function gisLoaded() { tokenClient = google.accounts.oauth2.initTokenClient({ client_id: CLIENT_ID, scope: SCOPES, callback: '' }); gisInited = true; }
+    function handleAuthClick() {
+        tokenClient.callback = (resp) => {
+            if (resp.error !== undefined) throw (resp);
+            document.getElementById('auth_button').innerHTML = '✅ Đã kết nối';
+            document.getElementById('sync_button').style.display = 'inline-block';
+        };
+        tokenClient.requestAccessToken({prompt: (gapi.client.getToken() === null ? 'consent' : '')});
+    }
+
+    // --- ĐỒNG BỘ GOOGLE (CÓ NÉ NGÀY NGHỈ) ---
+    async function syncToGoogle() {
+        const semS = document.getElementById('sem_start').value, semE = document.getElementById('sem_end').value;
+        if (!semS || !semE) return alert("Chọn ngày bắt đầu/kết thúc học kỳ!");
+        const btn = document.getElementById('sync_button'); btn.innerText = "⏳ Đang đồng bộ...";
+        try {
+            for (let item of schedule) {
+                const exDates = calculateExDates(item, semS, semE);
+                const event = createCalendarEvent(item, exDates, semS, semE);
+                await gapi.client.calendar.events.insert({ 'calendarId': 'primary', 'resource': event });
+            }
+            alert("Đã đồng bộ thành công (Loại trừ ngày nghỉ lễ)!");
+        } catch (e) { alert("Lỗi: " + e.message); }
+        btn.innerText = "📅 Đồng bộ Google Calendar";
+    }
+
+    function calculateExDates(item, semS, semE) {
+        let exDates = [];
+        let curr = new Date(semS), end = new Date(semE);
+        const targetDay = (item.day - 1) % 7; 
+        while (curr <= end) {
+            if (curr.getDay() === targetDay) {
+                const isOff = holidays.some(h => {
+                    let hS = new Date(h.start), hE = new Date(h.end);
+                    hS.setHours(0,0,0,0); hE.setHours(23,59,59,999);
+                    return curr >= hS && curr <= hE;
+                });
+                if (isOff) {
+                    let d = new Date(curr);
+                    d.setHours(Math.floor(item.startH), (item.startH%1)*60, 0);
+                    exDates.push(d.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z');
+                }
+            }
+            curr.setDate(curr.getDate() + 1);
+        }
+        return exDates;
+    }
+
+    function createCalendarEvent(item, exDates, semS, semE) {
+        let firstDate = new Date(semS);
+        const dayOfWeek = (item.day - 1) % 7;
+        while(firstDate.getDay() !== dayOfWeek) firstDate.setDate(firstDate.getDate() + 1);
+        const startDT = new Date(firstDate); startDT.setHours(Math.floor(item.startH), (item.startH%1)*60, 0);
+        const endDT = new Date(startDT.getTime() + item.duration * 3600000);
+        const recurrence = [`RRULE:FREQ=WEEKLY;UNTIL=${semE.replace(/-/g, '')}T235959Z`];
+        if (exDates.length > 0) recurrence.push(`EXDATE;VALUE=DATE-TIME:${exDates.join(',')}`);
+        return {
+            'summary': item.name, 'location': item.room + " (" + item.info + ")",
+            'start': { 'dateTime': startDT.toISOString(), 'timeZone': 'Asia/Ho_Chi_Minh' },
+            'end': { 'dateTime': endDT.toISOString(), 'timeZone': 'Asia/Ho_Chi_Minh' },
+            'recurrence': recurrence
+        };
+    }
+
+    // --- RENDER VÀ LOGIC NHẬP ---
+    function initGrid() {
+        const g = document.getElementById('grid');
+        g.innerHTML = `<div class="head">Giờ</div><div class="head">T2</div><div class="head">T3</div><div class="head">T4</div><div class="head">T5</div><div class="head">T6</div><div class="head">T7</div><div class="head">CN</div>`;
+        for(let h=6; h<=21; h++) { 
+            g.innerHTML += `<div class="time-row">${h}:00</div>`; 
+            for(let d=2; d<=8; d++) g.innerHTML += `<div class="cell" id="d${d}h${h}"></div>`; 
+        }
+    }
+
+    function render() {
+        initGrid();
+        schedule.forEach(c => {
+            const overlaps = schedule.filter(o => c.day === o.day && (c.startH < (o.startH + o.duration)) && (o.startH < (c.startH + c.duration)));
+            const slot = document.getElementById(`d${c.day}h${Math.floor(c.startH)}`);
+            if(!slot) return;
+            const card = document.createElement('div'); card.className = 'course-card';
+            card.style.height = (c.duration*55-4)+'px'; card.style.top = ((c.startH%1)*55+2)+'px';
+            card.style.width = `calc(${100/overlaps.length}% - 6px)`; card.style.left = `calc(${overlaps.indexOf(c)*(100/overlaps.length)}% + 3px)`;
+            card.style.backgroundColor = c.color;
+            card.onclick = () => { if(confirm("Xóa môn này?")) { schedule = schedule.filter(i => i.id !== c.id); saveData(); render(); } };
+            card.innerHTML = `<b>${c.name}</b><br>📍 ${c.room}<br><span style="font-size:9px">${c.info}</span>`;
+            slot.appendChild(card);
+        });
+    }
+
+    function addOther() {
+        const hS = parseInt(document.getElementById('other_startH').value), mS = parseInt(document.getElementById('other_startM').value);
+        const hE = parseInt(document.getElementById('other_endH').value), mE = parseInt(document.getElementById('other_endM').value);
+        const sDec = hS + mS/60, eDec = hE + mE/60;
+        schedule.push({ id: Date.now(), name: document.getElementById('other_name').value || "Activity", day: parseInt(document.getElementById('other_day').value), startH: sDec, duration: eDec - sDec, room: document.getElementById('other_room').value || "N/A", info: "Hoạt động", color: generatePureRandomColor() });
+        saveData(); render();
+    }
+
+    function addFUV() {
+        const hS = parseInt(document.getElementById('fuv_startH').value), mS = parseInt(document.getElementById('fuv_startM').value);
+        const hE = parseInt(document.getElementById('fuv_endH').value), mE = parseInt(document.getElementById('fuv_endM').value);
+        const sDec = hS + mS/60, eDec = hE + mE/60;
+        schedule.push({ id: Date.now(), name: document.getElementById('fuv_name').value || "Course", day: parseInt(document.getElementById('fuv_day').value), startH: sDec, duration: eDec - sDec, room: document.getElementById('fuv_room').value || "N/A", info: "Môn FUV", color: generatePureRandomColor() });
+        saveData(); render();
+    }
+
+    // --- LƯU TRỮ ---
+    function addHoliday() {
+        const s = document.getElementById('hol_start').value, e = document.getElementById('hol_end').value;
+        if (!s || !e) return alert("Chọn ngày!");
+        holidays.push({ id: Date.now(), start: s, end: e });
+        localStorage.setItem('holiday_data', JSON.stringify(holidays));
+        renderHolidays();
+    }
+    function removeHoliday(id) { holidays = holidays.filter(h => h.id !== id); localStorage.setItem('holiday_data', JSON.stringify(holidays)); renderHolidays(); }
+    function renderHolidays() {
+        const list = document.getElementById('hol_list');
+        list.innerHTML = holidays.map(h => `<div class="holiday-tag">${h.start} → ${h.end} <span onclick="removeHoliday(${h.id})">×</span></div>`).join('');
+    }
+    function saveData() { localStorage.setItem('fuv_community_schedule', JSON.stringify(schedule)); }
+    function saveDates() { localStorage.setItem('semester_dates', JSON.stringify({start: document.getElementById('sem_start').value, end: document.getElementById('sem_end').value})); }
+    function loadData() {
+        const s = localStorage.getItem('fuv_community_schedule'); if (s) schedule = JSON.parse(s);
+        const d = localStorage.getItem('semester_dates'); if (d) { const o = JSON.parse(d); document.getElementById('sem_start').value = o.start; document.getElementById('sem_end').value = o.end; }
+        const h = localStorage.getItem('holiday_data'); if (h) holidays = JSON.parse(h);
+        render(); renderHolidays();
+    }
+    function resetSchedule() { if(confirm("Xóa sạch toàn bộ?")) { localStorage.clear(); location.reload(); } }
+    function exportImg() { html2canvas(document.getElementById('captureRegion'), {scale: 2}).then(c => { const l = document.createElement('a'); l.download='Fulbright_Schedule.png'; l.href=c.toDataURL(); l.click(); }); }
+    loadData();
+</script>
+</body>
+</html>
