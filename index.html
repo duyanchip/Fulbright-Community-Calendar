@@ -33,9 +33,17 @@
         .calendar-panel { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); overflow-x: auto; }
         .calendar { display: grid; grid-template-columns: 70px repeat(7, 1fr); border: 1px solid var(--border); background: white; min-width: 1100px; position: relative; }
         .head { background: #2d3748; color: white; text-align: center; padding: 12px 0; font-weight: bold; border-right: 1px solid #4a5568; }
-        .time-row { height: var(--h); border-bottom: 1px solid var(--border); text-align: center; line-height: var(--h); font-size: 12px; background: #f7fafc; border-right: 1px solid var(--border); font-weight: bold; }
-        .cell { height: var(--h); border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); position: relative; }
-        .course-card { position: absolute; color: white; border-radius: 6px; padding: 6px; font-size: 11px; z-index: 10; box-shadow: 0 4px 8px rgba(0,0,0,0.15); cursor: pointer; overflow: hidden; }
+        .time-row { height: var(--h); box-sizing: border-box; border-bottom: 1px solid var(--border); text-align: center; line-height: var(--h); font-size: 12px; background: #f7fafc; border-right: 1px solid var(--border); font-weight: bold; }
+        .cell { height: var(--h); box-sizing: border-box; border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); position: relative; }
+        .course-card { position: absolute; box-sizing: border-box; color: white; border-radius: 6px; padding: 6px; font-size: 11px; z-index: 10; box-shadow: 0 4px 8px rgba(0,0,0,0.15); cursor: pointer; overflow: hidden; line-height: 1.35; }
+
+        .paste-box { background: #fff5f5; border: 1px dashed var(--fuv-color); border-radius: 8px; padding: 12px; margin-bottom: 15px; }
+        .paste-box textarea { width: 100%; min-height: 90px; padding: 8px; border: 1px solid #cbd5e0; border-radius: 6px; box-sizing: border-box; font-family: monospace; font-size: 11px; resize: vertical; }
+        .parse-status { font-size: 12px; margin-top: 8px; line-height: 1.5; min-height: 1px; }
+        .parse-status.ok { color: #22543d; background: #c6f6d5; padding: 8px; border-radius: 5px; }
+        .parse-status.err { color: #742a2a; background: #fed7d7; padding: 8px; border-radius: 5px; }
+        .manual-toggle { font-size: 13px; font-weight: bold; color: #718096; cursor: pointer; user-select: none; padding: 6px 0; margin-bottom: 8px; }
+        .manual-toggle:hover { color: var(--fuv-color); }
     </style>
 </head>
 <body>
@@ -80,6 +88,22 @@
 
         <div class="input-panel panel-fuv">
             <h3 style="margin-top:0; color:var(--fuv-color)">🎓 Môn học Fulbright</h3>
+
+            <div class="paste-box">
+                <label style="color:var(--fuv-color)">⚡ Dán nhanh từ Student Portal</label>
+                <textarea id="fuv_paste" placeholder="Bôi đen toàn bộ nội dung trang môn học trên Student Portal (Ctrl+A / Ctrl+C) rồi dán vào đây..."></textarea>
+                <div style="display:flex; gap:8px; align-items:center; margin-top:8px">
+                    <button class="btn" style="background:var(--fuv-color); flex:1" onclick="generateFromPaste()">✨ Generate</button>
+                    <button class="btn" style="background:#718096" onclick="document.getElementById('fuv_paste').value=''; setParseStatus('')">Xóa ô</button>
+                </div>
+                <div id="parse_status" class="parse-status"></div>
+            </div>
+
+            <div class="manual-toggle" onclick="toggleManual()">
+                <span id="manual_arrow">▸</span> Hoặc nhập tay
+            </div>
+
+            <div id="manual_fields" style="display:none">
             <label>Tên môn học</label><input type="text" id="fuv_name" placeholder="VD: Geopolitics, Ethics...">
             <label>Thứ</label>
             <select id="fuv_day">
@@ -93,6 +117,7 @@
             </div>
             <label>Phòng học</label><input type="text" id="fuv_room" placeholder="VD: Classroom 502">
             <button class="btn" style="background:var(--fuv-color); width:100%" onclick="addFUV()">Thêm môn FUV</button>
+            </div>
         </div>
     </div>
 
@@ -111,8 +136,8 @@
 
 <script>
     // --- THAY CLIENT_ID VÀ API_KEY CỦA BẠN TẠI ĐÂY ---
-    const CLIENT_ID = '797711309974-dt663ma8idsuvap759rvavmfu0rdjt11.apps.googleusercontent.com';
-    const API_KEY = 'AIzaSyBDD_8nEquG7Le_XbLKgm7CElfue2C9X8Y';
+    const CLIENT_ID = 'YOUR_CLIENT_ID.apps.googleusercontent.com';
+    const API_KEY = 'YOUR_API_KEY';
     const SCOPES = "https://www.googleapis.com/auth/calendar.events";
     const DISCOVERY_DOC = "https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest";
 
@@ -201,14 +226,21 @@
         }
     }
 
+    function rowHeight() {
+        const v = getComputedStyle(document.documentElement).getPropertyValue('--h');
+        const n = parseFloat(v);
+        return isNaN(n) ? 55 : n;
+    }
+
     function render() {
         initGrid();
+        const H = rowHeight();
         schedule.forEach(c => {
             const overlaps = schedule.filter(o => c.day === o.day && (c.startH < (o.startH + o.duration)) && (o.startH < (c.startH + c.duration)));
             const slot = document.getElementById(`d${c.day}h${Math.floor(c.startH)}`);
             if(!slot) return;
             const card = document.createElement('div'); card.className = 'course-card';
-            card.style.height = (c.duration*55-4)+'px'; card.style.top = ((c.startH%1)*55+2)+'px';
+            card.style.height = (c.duration*H - 3)+'px'; card.style.top = ((c.startH%1)*H + 1)+'px';
             card.style.width = `calc(${100/overlaps.length}% - 6px)`; card.style.left = `calc(${overlaps.indexOf(c)*(100/overlaps.length)}% + 3px)`;
             card.style.backgroundColor = c.color;
             card.onclick = () => { if(confirm("Xóa môn này?")) { schedule = schedule.filter(i => i.id !== c.id); saveData(); render(); } };
@@ -231,6 +263,204 @@
         const sDec = hS + mS/60, eDec = hE + mE/60;
         schedule.push({ id: Date.now(), name: document.getElementById('fuv_name').value || "Course", day: parseInt(document.getElementById('fuv_day').value), startH: sDec, duration: eDec - sDec, room: document.getElementById('fuv_room').value || "N/A", info: "Môn FUV", color: generatePureRandomColor() });
         saveData(); render();
+    }
+
+    // --- PARSE TỪ STUDENT PORTAL ---
+    const DAY_MAP = {
+        'monday': 2, 'mon': 2, 'tuesday': 3, 'tue': 3, 'tues': 3,
+        'wednesday': 4, 'wed': 4, 'thursday': 5, 'thu': 5, 'thur': 5, 'thurs': 5,
+        'friday': 6, 'fri': 6, 'saturday': 7, 'sat': 7, 'sunday': 8, 'sun': 8
+    };
+
+    // Mã môn: 2-6 chữ cái, có/không khoảng trắng, 2-4 số, hậu tố tùy ý (a, A, L, 01...)
+    // Bắt được: VS 214a, PSY 313, ARTS101, CORE 101, MATH101L, SOCI 323
+    const CODE_RE = /^([A-Za-z]{2,6}\s?-?\s?\d{2,4}[A-Za-z0-9]{0,3})\s*[-–—:]\s*(.+)$/;
+
+    function toggleManual() {
+        const f = document.getElementById('manual_fields');
+        const a = document.getElementById('manual_arrow');
+        const open = f.style.display === 'none';
+        f.style.display = open ? 'block' : 'none';
+        a.textContent = open ? '▾' : '▸';
+    }
+
+    function setParseStatus(msg, type) {
+        const el = document.getElementById('parse_status');
+        el.className = 'parse-status' + (type ? ' ' + type : '');
+        el.innerHTML = msg;
+    }
+
+    // Chuyển "8:00 AM", "16:45:00", "08:00" -> số thập phân (giờ)
+    function parseTimeToDecimal(str) {
+        if (!str) return null;
+        const s = str.trim();
+        const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})(?:\s*:\s*\d{2})?\s*(AM|PM|am|pm)?$/);
+        if (!m) return null;
+        let h = parseInt(m[1], 10);
+        const min = parseInt(m[2], 10);
+        const ap = m[3] ? m[3].toUpperCase() : null;
+        if (h > 23 || min > 59) return null;
+        if (ap === 'PM' && h < 12) h += 12;
+        if (ap === 'AM' && h === 12) h = 0;
+        return h + min / 60;
+    }
+
+    // Tìm tên môn học trong đoạn text
+    function extractCourseName(lines, raw) {
+        // "Course\n<Tên>\nOffering Type"  -> lấy tên nằm giữa
+        for (let i = 0; i < lines.length - 2; i++) {
+            if (/^Course$/i.test(lines[i]) && /^Offering Type$/i.test(lines[i + 2])) {
+                return lines[i + 1];
+            }
+        }
+        // "Course\n<Tên>\nStart Date" (block đầu trang)
+        for (let i = 0; i < lines.length - 2; i++) {
+            if (/^Course$/i.test(lines[i]) && /^Start Date$/i.test(lines[i + 2])) {
+                return lines[i + 1];
+            }
+        }
+        // Format 1: dòng dạng "VS 214a - Developing Vietnam"
+        for (const ln of lines) {
+            const m = ln.match(CODE_RE);
+            if (m) return m[2].trim();
+        }
+        // Fallback: dòng cuối "Course Offering: ARTS101_Fall2026_S01"
+        const co = raw.match(/Course Offering:\s*([A-Za-z0-9_]+)/);
+        if (co) return co[1];
+        return null;
+    }
+
+    // Tìm mã môn (VD: VS 214a, PSY 313, ARTS101_Fall2026_S01)
+    function extractCourseCode(lines, raw) {
+        for (const ln of lines) {
+            const m = ln.match(CODE_RE);
+            if (m) return m[1].trim();
+        }
+        const co = raw.match(/Course Offering ID\s*\n\s*([A-Za-z0-9_]+)/);
+        if (co) return co[1].split('_')[0];
+        const co2 = raw.match(/Course Offering:\s*([A-Za-z0-9_]+)/);
+        if (co2) return co2[1].split('_')[0];
+        return '';
+    }
+
+    // Tìm tất cả các block lịch: {room, start, end, days[]}
+    function extractSchedules(lines) {
+        const results = [];
+        for (let i = 0; i < lines.length; i++) {
+            const t1 = parseTimeToDecimal(lines[i]);
+            if (t1 === null) continue;
+            const t2 = parseTimeToDecimal(lines[i + 1]);
+            if (t2 === null) continue;
+            const dayLine = lines[i + 2];
+            if (!dayLine) continue;
+            const days = parseDays(dayLine);
+            if (days.length === 0) continue;
+            // Phòng: dòng ngay trước giờ bắt đầu
+            let room = lines[i - 1] || 'N/A';
+            if (/^(Start Time|End Time|Schedule|Facility|Action|Navigation Mode)$/i.test(room)) room = 'N/A';
+            if (parseTimeToDecimal(room) !== null) room = 'N/A';
+            results.push({ room: room, startH: t1, endH: t2, days: days });
+            i += 2;
+        }
+        return results;
+    }
+
+    // Cũng bắt được dòng gộp "8:00 AM - 9:30 AM - Classroom 7" (format 1)
+    function extractInlineSchedule(lines) {
+        for (const ln of lines) {
+            const m = ln.match(/^(\d{1,2}:\d{2}\s*(?:AM|PM)?)\s*[-–—]\s*(\d{1,2}:\d{2}\s*(?:AM|PM)?)\s*[-–—]\s*(.+)$/i);
+            if (m) {
+                const s = parseTimeToDecimal(m[1]), e = parseTimeToDecimal(m[2]);
+                if (s !== null && e !== null) return { room: m[3].trim(), startH: s, endH: e };
+            }
+        }
+        return null;
+    }
+
+    function parseDays(line) {
+        const found = [];
+        const tokens = line.toLowerCase().split(/[,;/&]+|\s+and\s+/);
+        for (let tk of tokens) {
+            tk = tk.trim().replace(/[^a-z]/g, '');
+            if (DAY_MAP[tk] && found.indexOf(DAY_MAP[tk]) === -1) found.push(DAY_MAP[tk]);
+        }
+        return found;
+    }
+
+    function generateFromPaste() {
+        const raw = document.getElementById('fuv_paste').value;
+        if (!raw.trim()) return setParseStatus('⚠️ Chưa có nội dung nào để đọc.', 'err');
+
+        const lines = raw.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+
+        const name = extractCourseName(lines, raw);
+        const code = extractCourseCode(lines, raw);
+        let blocks = extractSchedules(lines);
+
+        // Nếu bảng không có, thử dòng gộp + tìm dòng thứ riêng lẻ
+        if (blocks.length === 0) {
+            const inline = extractInlineSchedule(lines);
+            if (inline) {
+                for (const ln of lines) {
+                    const d = parseDays(ln);
+                    if (d.length > 0 && /,|and/i.test(ln + ',')) {
+                        blocks.push({ room: inline.room, startH: inline.startH, endH: inline.endH, days: d });
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (blocks.length === 0)
+            return setParseStatus('❌ Không tìm thấy lịch học. Hãy chắc chắn bạn đã copy cả bảng <b>Course Offering Schedules</b> (Facility / Start Time / End Time / Schedule).', 'err');
+
+        if (!name)
+            return setParseStatus('❌ Đọc được giờ học nhưng không tìm ra tên môn. Bạn nhập tay tên môn giúp mình nha.', 'err');
+
+        // Mỗi môn 1 màu chung, các buổi trong tuần dùng cùng màu
+        const color = generatePureRandomColor();
+        let added = 0, skipped = [];
+        const detail = [];
+
+        blocks.forEach(b => {
+            const dur = b.endH - b.startH;
+            if (dur <= 0) { skipped.push('Giờ kết thúc không hợp lệ'); return; }
+            b.days.forEach(d => {
+                if (isDuplicate(name, d, b.startH)) { skipped.push(dayName(d) + ' (đã có)'); return; }
+                schedule.push({
+                    id: Date.now() + Math.random(),
+                    name: name,
+                    day: d,
+                    startH: b.startH,
+                    duration: dur,
+                    room: b.room,
+                    info: code ? 'Môn FUV · ' + code : 'Môn FUV',
+                    color: color
+                });
+                added++;
+                detail.push(dayName(d) + ' ' + fmt(b.startH) + '–' + fmt(b.endH) + ' @ ' + b.room);
+            });
+        });
+
+        saveData(); render();
+
+        if (added === 0)
+            return setParseStatus('⚠️ Không thêm buổi nào mới (có thể đã tồn tại trong lịch).', 'err');
+
+        let msg = '✅ Đã thêm <b>' + name + '</b>' + (code ? ' (' + code + ')' : '') + ' — ' + added + ' buổi/tuần:<br>' + detail.join('<br>');
+        if (skipped.length) msg += '<br><i style="color:#975a16">Bỏ qua: ' + skipped.join(', ') + '</i>';
+        setParseStatus(msg, 'ok');
+        document.getElementById('fuv_paste').value = '';
+    }
+
+    function isDuplicate(name, day, startH) {
+        return schedule.some(s => s.name === name && s.day === day && Math.abs(s.startH - startH) < 0.01);
+    }
+
+    function dayName(d) { return ['','','T2','T3','T4','T5','T6','T7','CN'][d] || '?'; }
+    function fmt(h) {
+        const hh = Math.floor(h), mm = Math.round((h % 1) * 60);
+        return hh + ':' + (mm < 10 ? '0' + mm : mm);
     }
 
     // --- LƯU TRỮ ---
@@ -259,6 +489,4 @@
     loadData();
 </script>
 </body>
-
 </html>
-
