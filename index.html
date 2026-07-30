@@ -6,7 +6,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <script async defer src="https://apis.google.com/js/api.js" onload="gapiLoaded()"></script>
     <script async defer src="https://accounts.google.com/gsi/client" onload="gisLoaded()"></script>
-    <script src="https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js"></script>
+    <script src="https://alcdn.msauth.net/browser/2.35.0/js/msal-browser.min.js"></script>
     <style>
         :root { --h: 55px; --other-color: #007bff; --fuv-color: #ce0000; --border: #e2e8f0; }
         body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; margin: 0; padding: 20px; }
@@ -231,11 +231,47 @@
     }
 
     // ============ MICROSOFT / OUTLOOK ============
-    function ensureMsal() {
+    // Thử lần lượt nhiều nguồn: CDN Microsoft (US West), CDN Microsoft (EU North), rồi npm mirror
+    const MSAL_CDNS = [
+        'https://alcdn.msauth.net/browser/2.35.0/js/msal-browser.min.js',
+        'https://alcdn.msftauth.net/browser/2.35.0/js/msal-browser.min.js',
+        'https://cdn.jsdelivr.net/npm/@azure/msal-browser@2.38.3/lib/msal-browser.min.js',
+        'https://unpkg.com/@azure/msal-browser@2.38.3/lib/msal-browser.min.js'
+    ];
+
+    function loadScriptOnce(src) {
+        return new Promise((resolve, reject) => {
+            const s = document.createElement('script');
+            s.src = src;
+            s.async = true;
+            s.onload = () => resolve();
+            s.onerror = () => reject(new Error(src));
+            document.head.appendChild(s);
+        });
+    }
+
+    async function loadMsalLib() {
+        if (typeof msal !== 'undefined') return true;
+        for (const url of MSAL_CDNS) {
+            try {
+                await loadScriptOnce(url);
+                if (typeof msal !== 'undefined') { console.log('MSAL tải được từ:', url); return true; }
+            } catch (e) {
+                console.warn('Không tải được MSAL từ:', e.message);
+            }
+        }
+        return false;
+    }
+
+    async function ensureMsal() {
         if (msalInstance) return true;
-        if (typeof msal === 'undefined') { alert("Chưa tải được thư viện Microsoft (MSAL). Kiểm tra kết nối mạng rồi tải lại trang."); return false; }
         if (!MS_CLIENT_ID || MS_CLIENT_ID === 'YOUR_AZURE_APP_CLIENT_ID') {
             alert("Bạn chưa dán Application (client) ID vào biến MS_CLIENT_ID trong file.\n\nDùng nút '📥 Tải file .ics' cũng đồng bộ được mà không cần đăng nhập.");
+            return false;
+        }
+        const ok = await loadMsalLib();
+        if (!ok) {
+            alert("Không tải được thư viện Microsoft (MSAL) từ bất kỳ nguồn nào.\n\nCó thể do mạng chặn CDN hoặc tiện ích chặn quảng cáo. Mở Console (F12) để xem chi tiết.\n\nTrong lúc chờ, nút '📥 Tải file .ics' vẫn dùng được bình thường.");
             return false;
         }
         msalInstance = new msal.PublicClientApplication({
@@ -250,7 +286,7 @@
     }
 
     async function handleMsAuthClick() {
-        if (!ensureMsal()) return;
+        if (!(await ensureMsal())) return;
         try {
             const res = await msalInstance.loginPopup({ scopes: MS_SCOPES, prompt: 'select_account' });
             msAccount = res.account;
