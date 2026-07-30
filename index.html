@@ -6,6 +6,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <script async defer src="https://apis.google.com/js/api.js" onload="gapiLoaded()"></script>
     <script async defer src="https://accounts.google.com/gsi/client" onload="gisLoaded()"></script>
+    <script src="https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js"></script>
     <style>
         :root { --h: 55px; --other-color: #007bff; --fuv-color: #ce0000; --border: #e2e8f0; }
         body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; margin: 0; padding: 20px; }
@@ -125,6 +126,9 @@
         <button class="btn btn-util" style="background:#28a745" onclick="exportImg()">📸 Xuất ảnh lịch</button>
         <button id="auth_button" class="btn btn-util btn-google" onclick="handleAuthClick()">🔐 Đăng nhập Google</button>
         <button id="sync_button" class="btn btn-util" style="background:#db4437; display:none" onclick="syncToGoogle()">📅 Đồng bộ Google Calendar</button>
+        <button id="ms_auth_button" class="btn btn-util" style="background:#0078d4" onclick="handleMsAuthClick()">🔐 Đăng nhập Outlook</button>
+        <button id="ms_sync_button" class="btn btn-util" style="background:#0053a0; display:none" onclick="syncToOutlook()">📅 Đồng bộ Outlook Calendar</button>
+        <button class="btn btn-util" style="background:#6b46c1" onclick="downloadICS()">📥 Tải file .ics</button>
         <button class="btn btn-util" onclick="resetSchedule()">🗑 Xóa sạch</button>
     </div>
 
@@ -141,7 +145,17 @@
     const SCOPES = "https://www.googleapis.com/auth/calendar.events";
     const DISCOVERY_DOC = "https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest";
 
+    // ====== DÁN APPLICATION (CLIENT) ID TỪ AZURE VÀO ĐÂY ======
+    const MS_CLIENT_ID = '866e9bdf-c3b3-4374-b50c-72ba5a7f6dfe';
+    // "common" = khớp với lựa chọn "Any Entra ID Tenant + Personal Microsoft accounts"
+    const MS_AUTHORITY = 'https://login.microsoftonline.com/common';
+    // Để trống = tự tính theo URL đang mở. Điền cụ thể nếu muốn ép cứng một URL đã đăng ký.
+    const MS_REDIRECT_URI = '';
+    const MS_SCOPES = ["Calendars.ReadWrite"];
+    const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
+
     let schedule = [], holidays = [], tokenClient, gapiInited = false, gisInited = false;
+    let msalInstance = null, msAccount = null;
 
     // --- MÀU NGẪU NHIÊN ---
     function generatePureRandomColor() {
@@ -214,6 +228,262 @@
             'end': { 'dateTime': endDT.toISOString(), 'timeZone': 'Asia/Ho_Chi_Minh' },
             'recurrence': recurrence
         };
+    }
+
+    // ============ MICROSOFT / OUTLOOK ============
+    function ensureMsal() {
+        if (msalInstance) return true;
+        if (typeof msal === 'undefined') { alert("Chưa tải được thư viện Microsoft (MSAL). Kiểm tra kết nối mạng rồi tải lại trang."); return false; }
+        if (!MS_CLIENT_ID || MS_CLIENT_ID === 'YOUR_AZURE_APP_CLIENT_ID') {
+            alert("Bạn chưa dán Application (client) ID vào biến MS_CLIENT_ID trong file.\n\nDùng nút '📥 Tải file .ics' cũng đồng bộ được mà không cần đăng nhập.");
+            return false;
+        }
+        msalInstance = new msal.PublicClientApplication({
+            auth: {
+                clientId: MS_CLIENT_ID,
+                authority: MS_AUTHORITY,
+                redirectUri: MS_REDIRECT_URI || (window.location.origin + window.location.pathname)
+            },
+            cache: { cacheLocation: 'localStorage' }
+        });
+        return true;
+    }
+
+    async function handleMsAuthClick() {
+        if (!ensureMsal()) return;
+        try {
+            const res = await msalInstance.loginPopup({ scopes: MS_SCOPES, prompt: 'select_account' });
+            msAccount = res.account;
+            msalInstance.setActiveAccount(msAccount);
+            document.getElementById('ms_auth_button').innerHTML = '✅ Đã kết nối Outlook';
+            document.getElementById('ms_sync_button').style.display = 'inline-block';
+        } catch (e) {
+            alert("Đăng nhập Outlook thất bại: " + (e.message || e));
+        }
+    }
+
+    async function getMsToken() {
+        const req = { scopes: MS_SCOPES, account: msAccount };
+        try {
+            const r = await msalInstance.acquireTokenSilent(req);
+            return r.accessToken;
+        } catch (e) {
+            const r = await msalInstance.acquireTokenPopup(req);
+            return r.accessToken;
+        }
+    }
+
+    async function graphFetch(token, path, method, body) {
+        const opts = { method: method, headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' } };
+        if (body) opts.body = JSON.stringify(body);
+        const resp = await fetch(GRAPH_BASE + path, opts);
+        if (!resp.ok) {
+            let msg = resp.status + ' ' + resp.statusText;
+            try { const j = await resp.json(); if (j.error) msg = j.error.message; } catch (_) {}
+            throw new Error(msg);
+        }
+        return resp.status === 204 ? null : resp.json();
+    }
+
+    async function syncToOutlook() {
+        const semS = document.getElementById('sem_start').value, semE = document.getElementById('sem_end').value;
+        if (!semS || !semE) return alert("Chọn ngày bắt đầu/kết thúc học kỳ!");
+        if (!msAccount) return alert("Bạn cần đăng nhập Outlook trước!");
+        const btn = document.getElementById('ms_sync_button');
+        const label = "📅 Đồng bộ Outlook Calendar";
+        btn.innerText = "⏳ Đang đồng bộ...";
+        let totalRemoved = 0, done = 0;
+        try {
+            const token = await getMsToken();
+            for (let item of schedule) {
+                const created = await graphFetch(token, '/me/events', 'POST', createOutlookEvent(item, semS, semE));
+                totalRemoved += await removeOutlookHolidayInstances(token, created.id, item, semS, semE);
+                done++;
+            }
+            let msg = "Đã đồng bộ " + done + " môn lên Outlook Calendar!";
+            if (totalRemoved > 0) msg += "\nĐã bỏ " + totalRemoved + " buổi trùng ngày nghỉ lễ.";
+            alert(msg);
+        } catch (e) { alert("Lỗi Outlook: " + (e.message || e)); }
+        btn.innerText = label;
+    }
+
+    // Tạo event lặp hàng tuần theo định dạng Microsoft Graph
+    function createOutlookEvent(item, semS, semE) {
+        let firstDate = new Date(semS);
+        const dayOfWeek = (item.day - 1) % 7; // 0=CN
+        while (firstDate.getDay() !== dayOfWeek) firstDate.setDate(firstDate.getDate() + 1);
+
+        const sh = Math.floor(item.startH), sm = Math.round((item.startH % 1) * 60);
+        const startLocal = pad2(sh) + ':' + pad2(sm) + ':00';
+        const endTotal = item.startH + item.duration;
+        const eh = Math.floor(endTotal), em = Math.round((endTotal % 1) * 60);
+        const endLocal = pad2(eh) + ':' + pad2(em) + ':00';
+        const firstStr = isoDate(firstDate);
+
+        const GRAPH_DAYS = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+
+        return {
+            subject: item.name,
+            location: { displayName: item.room + " (" + item.info + ")" },
+            start: { dateTime: firstStr + 'T' + startLocal, timeZone: 'SE Asia Standard Time' },
+            end:   { dateTime: firstStr + 'T' + endLocal,   timeZone: 'SE Asia Standard Time' },
+            recurrence: {
+                pattern: { type: 'weekly', interval: 1, daysOfWeek: [GRAPH_DAYS[dayOfWeek]] },
+                range: { type: 'endDate', startDate: firstStr, endDate: semE }
+            }
+        };
+    }
+
+    // Graph không hỗ trợ EXDATE -> lấy các instance trong khoảng học kỳ, xóa cái nào rơi vào ngày nghỉ
+    async function removeOutlookHolidayInstances(token, seriesId, item, semS, semE) {
+        if (!holidays.length) return 0;
+        const startWin = semS + 'T00:00:00';
+        const endWin = semE + 'T23:59:59';
+        const path = '/me/events/' + seriesId + '/instances?startDateTime=' + encodeURIComponent(startWin)
+                   + '&endDateTime=' + encodeURIComponent(endWin) + '&$top=200';
+        let data;
+        try { data = await graphFetch(token, path, 'GET'); }
+        catch (_) { return 0; }
+        let removed = 0;
+        for (const inst of (data.value || [])) {
+            const dstr = (inst.start && inst.start.dateTime) ? inst.start.dateTime.slice(0, 10) : null;
+            if (!dstr) continue;
+            const d = new Date(dstr + 'T00:00:00');
+            const isOff = holidays.some(h => {
+                let hS = new Date(h.start), hE = new Date(h.end);
+                hS.setHours(0,0,0,0); hE.setHours(23,59,59,999);
+                return d >= hS && d <= hE;
+            });
+            if (isOff) {
+                try { await graphFetch(token, '/me/events/' + inst.id, 'DELETE'); removed++; }
+                catch (_) {}
+            }
+        }
+        return removed;
+    }
+
+    function pad2(n) { return (n < 10 ? '0' : '') + n; }
+    function isoDate(d) { return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); }
+
+    // ============ XUẤT FILE .ICS (chuẩn iCalendar RFC 5545) ============
+    const ICS_DAYS = ['SU','MO','TU','WE','TH','FR','SA'];
+    const TZID = 'Asia/Ho_Chi_Minh';
+
+    function icsEscape(s) {
+        return String(s == null ? '' : s)
+            .replace(/\\/g, '\\\\').replace(/;/g, '\\;')
+            .replace(/,/g, '\\,').replace(/\r?\n/g, '\\n');
+    }
+
+    // RFC 5545: dòng dài quá 75 octet phải gấp, dòng nối bắt đầu bằng 1 space.
+    // Tính theo byte UTF-8 để không cắt giữa ký tự tiếng Việt.
+    function icsFold(line) {
+        const enc = new TextEncoder();
+        let out = '', cur = '', bytes = 0;
+        for (const ch of line) {
+            const b = enc.encode(ch).length;
+            if (bytes + b > 75) { out += cur + '\r\n '; cur = ''; bytes = 1; }
+            cur += ch; bytes += b;
+        }
+        return out + cur;
+    }
+
+    function ymd(d) { return d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate()); }
+
+    function hhmmss(hDec) {
+        const h = Math.floor(hDec), m = Math.round((hDec % 1) * 60);
+        return pad2(h) + pad2(m) + '00';
+    }
+
+    // UNTIL bắt buộc là UTC khi DTSTART có TZID -> quy đổi cuối ngày VN (+07:00) sang UTC
+    function icsUntil(semE) {
+        const d = new Date(semE + 'T23:59:59+07:00');
+        return d.getUTCFullYear() + pad2(d.getUTCMonth() + 1) + pad2(d.getUTCDate()) + 'T'
+             + pad2(d.getUTCHours()) + pad2(d.getUTCMinutes()) + pad2(d.getUTCSeconds()) + 'Z';
+    }
+
+    // 'YYYY-MM-DD' -> Date lúc 0h giờ địa phương (new Date('2026-09-02') bị hiểu là UTC)
+    function localDate(s) {
+        const p = String(s).slice(0, 10).split('-').map(Number);
+        return new Date(p[0], p[1] - 1, p[2]);
+    }
+
+    function isHolidayDate(d) {
+        return holidays.some(h => {
+            const hS = localDate(h.start), hE = localDate(h.end);
+            hE.setHours(23, 59, 59, 999);
+            return d >= hS && d <= hE;
+        });
+    }
+
+    function buildICS(semS, semE) {
+        const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+        const L = [
+            'BEGIN:VCALENDAR', 'VERSION:2.0',
+            'PRODID:-//FUV Calendar//Lich ca nhan//VI',
+            'CALSCALE:GREGORIAN', 'METHOD:PUBLISH',
+            'X-WR-CALNAME:Lich hoc Fulbright',
+            'X-WR-TIMEZONE:' + TZID,
+            'BEGIN:VTIMEZONE', 'TZID:' + TZID,
+            'BEGIN:STANDARD',
+            'DTSTART:19700101T000000',
+            'TZOFFSETFROM:+0700', 'TZOFFSETTO:+0700', 'TZNAME:+07',
+            'END:STANDARD', 'END:VTIMEZONE'
+        ];
+        const until = icsUntil(semE);
+
+        const lastDay = localDate(semE);
+
+        schedule.forEach((item, idx) => {
+            const dow = (item.day - 1) % 7;
+            const first = localDate(semS);
+            while (first.getDay() !== dow) first.setDate(first.getDate() + 1);
+
+            const startStr = hhmmss(item.startH);
+            const endStr = hhmmss(item.startH + item.duration);
+
+            // Buổi đầu không được rơi vào ngày nghỉ: vài client hiểu sai khi EXDATE trùng DTSTART
+            while (first <= lastDay && isHolidayDate(first)) first.setDate(first.getDate() + 7);
+            if (first > lastDay) return; // cả học kỳ đều nghỉ -> bỏ qua môn này
+
+            // Liệt kê các buổi còn lại rơi vào ngày nghỉ -> EXDATE (cùng TZID với DTSTART)
+            const ex = [];
+            const cur = new Date(first);
+            while (cur <= lastDay) {
+                if (isHolidayDate(cur)) ex.push(ymd(cur) + 'T' + startStr);
+                cur.setDate(cur.getDate() + 7);
+            }
+
+            L.push('BEGIN:VEVENT');
+            L.push('UID:fuv-' + idx + '-' + Math.floor(item.id) + '@fuv-calendar');
+            L.push('DTSTAMP:' + stamp);
+            L.push('DTSTART;TZID=' + TZID + ':' + ymd(first) + 'T' + startStr);
+            L.push('DTEND;TZID=' + TZID + ':' + ymd(first) + 'T' + endStr);
+            L.push('RRULE:FREQ=WEEKLY;UNTIL=' + until);
+            if (ex.length) L.push('EXDATE;TZID=' + TZID + ':' + ex.join(','));
+            L.push('SUMMARY:' + icsEscape(item.name));
+            if (item.room) L.push('LOCATION:' + icsEscape(item.room));
+            if (item.info) L.push('DESCRIPTION:' + icsEscape(item.info));
+            L.push('END:VEVENT');
+        });
+
+        L.push('END:VCALENDAR');
+        return L.map(icsFold).join('\r\n') + '\r\n';
+    }
+
+    function downloadICS() {
+        const semS = document.getElementById('sem_start').value;
+        const semE = document.getElementById('sem_end').value;
+        if (!semS || !semE) return alert("Chọn ngày bắt đầu/kết thúc học kỳ trước đã!");
+        if (new Date(semE) < new Date(semS)) return alert("Ngày kết thúc phải sau ngày bắt đầu!");
+        if (!schedule.length) return alert("Lịch đang trống, chưa có gì để xuất.");
+
+        const blob = new Blob([buildICS(semS, semE)], { type: 'text/calendar;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = 'FUV-lich-hoc.ics';
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
     }
 
     // --- RENDER VÀ LOGIC NHẬP ---
