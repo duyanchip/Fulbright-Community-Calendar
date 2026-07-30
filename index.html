@@ -4,8 +4,6 @@
     <meta charset="UTF-8">
     <title>Fulbright Student Schedule - Community Version</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-    <script async defer src="https://apis.google.com/js/api.js" onload="gapiLoaded()"></script>
-    <script async defer src="https://accounts.google.com/gsi/client" onload="gisLoaded()"></script>
     <script src="https://alcdn.msauth.net/browser/2.35.0/js/msal-browser.min.js"></script>
     <style>
         :root { --h: 55px; --other-color: #007bff; --fuv-color: #ce0000; --border: #e2e8f0; }
@@ -164,16 +162,41 @@
         return color;
     }
 
-    // --- GOOGLE API ---
-    function gapiLoaded() { gapi.load('client', async () => { await gapi.client.init({ apiKey: API_KEY, discoveryDocs: [DISCOVERY_DOC] }); gapiInited = true; }); }
-    function gisLoaded() { tokenClient = google.accounts.oauth2.initTokenClient({ client_id: CLIENT_ID, scope: SCOPES, callback: '' }); gisInited = true; }
-    function handleAuthClick() {
+    // --- GOOGLE API (tải lúc bấm nút, tránh lỗi onload chạy trước khi hàm được định nghĩa) ---
+    async function ensureGoogle() {
+        if (gapiInited && gisInited) return true;
+        if (!CLIENT_ID || CLIENT_ID.indexOf('YOUR_CLIENT_ID') === 0) {
+            alert("Bạn chưa dán CLIENT_ID và API_KEY của Google vào file.\n\nDùng nút '📥 Tải file .ics' cũng đồng bộ được mà không cần đăng nhập.");
+            return false;
+        }
+        try {
+            if (!gapiInited) {
+                await loadScriptOnce('https://apis.google.com/js/api.js');
+                await new Promise((res, rej) => gapi.load('client', { callback: res, onerror: rej }));
+                await gapi.client.init({ apiKey: API_KEY, discoveryDocs: [DISCOVERY_DOC] });
+                gapiInited = true;
+            }
+            if (!gisInited) {
+                await loadScriptOnce('https://accounts.google.com/gsi/client');
+                tokenClient = google.accounts.oauth2.initTokenClient({ client_id: CLIENT_ID, scope: SCOPES, callback: '' });
+                gisInited = true;
+            }
+            return true;
+        } catch (e) {
+            console.error('Lỗi tải thư viện Google:', e);
+            alert("Không tải được thư viện Google. Kiểm tra mạng hoặc tiện ích chặn quảng cáo.\n\nNút '📥 Tải file .ics' vẫn dùng bình thường.");
+            return false;
+        }
+    }
+
+    async function handleAuthClick() {
+        if (!(await ensureGoogle())) return;
         tokenClient.callback = (resp) => {
-            if (resp.error !== undefined) throw (resp);
-            document.getElementById('auth_button').innerHTML = '✅ Đã kết nối';
+            if (resp.error !== undefined) { alert("Đăng nhập Google thất bại: " + resp.error); return; }
+            document.getElementById('auth_button').innerHTML = '✅ Đã kết nối Google';
             document.getElementById('sync_button').style.display = 'inline-block';
         };
-        tokenClient.requestAccessToken({prompt: (gapi.client.getToken() === null ? 'consent' : '')});
+        tokenClient.requestAccessToken({ prompt: (gapi.client.getToken() === null ? 'consent' : '') });
     }
 
     // --- ĐỒNG BỘ GOOGLE (CÓ NÉ NGÀY NGHỈ) ---
@@ -239,15 +262,18 @@
         'https://unpkg.com/@azure/msal-browser@2.38.3/lib/msal-browser.min.js'
     ];
 
+    const _scriptCache = {};
     function loadScriptOnce(src) {
-        return new Promise((resolve, reject) => {
+        if (_scriptCache[src]) return _scriptCache[src];
+        _scriptCache[src] = new Promise((resolve, reject) => {
             const s = document.createElement('script');
             s.src = src;
             s.async = true;
             s.onload = () => resolve();
             s.onerror = () => reject(new Error(src));
             document.head.appendChild(s);
-        });
+        }).catch(err => { delete _scriptCache[src]; throw err; }); // cho phép thử lại
+        return _scriptCache[src];
     }
 
     async function loadMsalLib() {
